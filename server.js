@@ -21,27 +21,21 @@ const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
-// Read products – handles both {"products":[]} and direct arrays
+// Read products – handles {"products": [...]} structure
 const readProducts = async () => {
   const res = await fetch(JSONBIN_URL, {
     headers: { 'X-Master-Key': JSONBIN_API_KEY }
   });
+  if (!res.ok) throw new Error(`JSONBin read failed: ${res.status}`);
   const data = await res.json();
-  let products = [];
-  if (data.record && Array.isArray(data.record)) {
-    products = data.record;
-  } else if (data.record && data.record.products && Array.isArray(data.record.products)) {
-    products = data.record.products;
-  } else if (Array.isArray(data)) {
-    products = data;
-  }
-  return products;
+  // data.record contains the saved JSON (should be { products: [...] })
+  return data.record?.products || [];
 };
 
 // Write products – preserves {"products": [...]} structure
 const writeProducts = async (products) => {
   const payload = { products };
-  await fetch(JSONBIN_URL, {
+  const res = await fetch(JSONBIN_URL, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -49,6 +43,11 @@ const writeProducts = async (products) => {
     },
     body: JSON.stringify(payload),
   });
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`JSONBin write failed: ${res.status} ${errorText}`);
+  }
+  return res.json();
 };
 
 // Helper to generate next dress code (1001001, 1001002, ...)
