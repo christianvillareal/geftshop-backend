@@ -22,7 +22,6 @@ const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
-// Read products – handles {"products": [...]} structure
 const readProducts = async () => {
   const res = await fetch(JSONBIN_URL, {
     headers: { 'X-Master-Key': JSONBIN_API_KEY }
@@ -32,7 +31,6 @@ const readProducts = async () => {
   return data.record?.products || [];
 };
 
-// Write products – preserves {"products": [...]}
 const writeProducts = async (products) => {
   const payload = { products };
   const res = await fetch(JSONBIN_URL, {
@@ -43,14 +41,10 @@ const writeProducts = async (products) => {
     },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`JSONBin write failed: ${res.status} ${errorText}`);
-  }
+  if (!res.ok) throw new Error(`JSONBin write failed: ${res.status}`);
   return res.json();
 };
 
-// Helper to generate next dress code (1001001, 1001002, ...)
 const getNextDressCode = async () => {
   const products = await readProducts();
   let max = 1001000;
@@ -84,8 +78,8 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// POST new product (multiple images)
-app.post('/api/products', upload.array('images', 10), async (req, res) => {
+// POST new product (max 8 images)
+app.post('/api/products', upload.array('images', 8), async (req, res) => {
   try {
     let imageUrls = [];
     if (req.files && req.files.length) {
@@ -127,28 +121,43 @@ app.post('/api/products', upload.array('images', 10), async (req, res) => {
   }
 });
 
-// PUT update product (multiple images – replace old ones)
-app.put('/api/products/:id', upload.array('images', 10), async (req, res) => {
+// PUT update product – adds new images, keeps existing, max 8 total
+app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
   try {
     let products = await readProducts();
     const index = products.findIndex(p => p.id == req.params.id);
     if (index === -1) return res.status(404).json({ error: 'Not found' });
 
-    let imageUrls = products[index].imageUrls || [];
+    // Existing image URLs kept by admin (sent as JSON string)
+    let keptImageUrls = [];
+    if (req.body.existingImages) {
+      try {
+        keptImageUrls = JSON.parse(req.body.existingImages);
+      } catch (e) {
+        keptImageUrls = [];
+      }
+    }
+    if (!Array.isArray(keptImageUrls)) keptImageUrls = [];
+
+    // Upload new images
+    let newImageUrls = [];
     if (req.files && req.files.length) {
-      // Replace old images with new ones
-      imageUrls = [];
       for (const file of req.files) {
         const result = await cloudinary.uploader.upload(file.path);
-        imageUrls.push(result.secure_url);
+        newImageUrls.push(result.secure_url);
         fs.unlinkSync(file.path);
       }
+    }
+
+    let finalImageUrls = [...keptImageUrls, ...newImageUrls];
+    if (finalImageUrls.length > 8) {
+      return res.status(400).json({ error: 'Maximum 8 images allowed per product' });
     }
 
     const updated = {
       ...products[index],
       ...req.body,
-      imageUrls: imageUrls,
+      imageUrls: finalImageUrls,
       price: parseFloat(req.body.price) || products[index].price,
       stock: parseInt(req.body.stock) !== undefined ? parseInt(req.body.stock) : products[index].stock,
     };
