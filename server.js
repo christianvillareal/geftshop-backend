@@ -6,7 +6,6 @@ const cloudinary = require('cloudinary').v2;
 const fetch = require('node-fetch');
 const fs = require('fs');
 
-// Cloudinary config
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -18,36 +17,38 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
-// JSONBin config
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
-// Read products from JSONBin
+// Read products – handles both {"products":[]} and direct arrays
 const readProducts = async () => {
   const res = await fetch(JSONBIN_URL, {
     headers: { 'X-Master-Key': JSONBIN_API_KEY }
   });
-  if (!res.ok) throw new Error(`JSONBin read failed: ${res.status}`);
   const data = await res.json();
-  return data.record || [];
+  let products = [];
+  if (data.record && Array.isArray(data.record)) {
+    products = data.record;
+  } else if (data.record && data.record.products && Array.isArray(data.record.products)) {
+    products = data.record.products;
+  } else if (Array.isArray(data)) {
+    products = data;
+  }
+  return products;
 };
 
-// Write products to JSONBin (with error check)
+// Write products – preserves {"products": [...]} structure
 const writeProducts = async (products) => {
-  const res = await fetch(JSONBIN_URL, {
+  const payload = { products };
+  await fetch(JSONBIN_URL, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
       'X-Master-Key': JSONBIN_API_KEY,
     },
-    body: JSON.stringify(products),
+    body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`JSONBin write failed: ${res.status} ${errorText}`);
-  }
-  return res.json();
 };
 
 // Helper to generate next dress code (1001001, 1001002, ...)
@@ -60,8 +61,6 @@ const getNextDressCode = async () => {
   }
   return (max + 1).toString();
 };
-
-// ========== API ROUTES ==========
 
 // GET all products
 app.get('/api/products', async (req, res) => {
@@ -86,7 +85,7 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// POST new product (with image upload)
+// POST new product (with image)
 app.post('/api/products', upload.single('image'), async (req, res) => {
   try {
     let imageUrl = null;
@@ -107,7 +106,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       color: req.body.color,
       size: req.body.size,
       stock: parseInt(req.body.stock) || 0,
-      dressCode: nextDressCode,                 // auto‑generated
+      dressCode: nextDressCode,
       productWeight: parseFloat(req.body.productWeight) || 0,
       shippingFee: parseFloat(req.body.shippingFee) || 0,
       weightKg: parseFloat(req.body.weightKg) || 0,
@@ -127,7 +126,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
   }
 });
 
-// PUT update product (image optional)
+// PUT update product
 app.put('/api/products/:id', upload.single('image'), async (req, res) => {
   try {
     let products = await readProducts();
@@ -147,7 +146,6 @@ app.put('/api/products/:id', upload.single('image'), async (req, res) => {
       imageUrl,
       price: parseFloat(req.body.price) || products[index].price,
       stock: parseInt(req.body.stock) !== undefined ? parseInt(req.body.stock) : products[index].stock,
-      // dressCode is NOT updated – it stays as original
     };
     products[index] = updated;
     await writeProducts(products);
@@ -170,11 +168,6 @@ app.delete('/api/products/:id', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Delete failed: ' + err.message });
   }
-});
-
-// Root route
-app.get('/', (req, res) => {
-  res.send('Geftshop API is running. Visit /api/products');
 });
 
 const PORT = process.env.PORT || 5000;
