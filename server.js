@@ -32,6 +32,19 @@ const readProducts = async () => {
   return data.record || [];
 };
 
+// Helper to generate next dress code (e.g., 1001001 → 1001002)
+const getNextDressCode = async () => {
+  const products = await readProducts();
+  let max = 1001000; // starting base -1
+  for (const p of products) {
+    if (p.dressCode && typeof p.dressCode === 'string') {
+      const num = parseInt(p.dressCode, 10);
+      if (!isNaN(num) && num > max) max = num;
+    }
+  }
+  return (max + 1).toString();
+};
+
 // Write products to JSONBin
 const writeProducts = async (products) => {
   await fetch(JSONBIN_URL, {
@@ -66,17 +79,19 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       imageUrl = result.secure_url;
       fs.unlinkSync(req.file.path);
     }
-    const products = await readProducts();
-    const newId = products.length ? Math.max(...products.map(p => p.id)) + 1 : 1;
+
+    const products = await readProducts();                // <-- your existing line
+    const nextDressCode = await getNextDressCode();      // <-- ADD THIS LINE
+
     const newProduct = {
-      id: newId,
+      id: Date.now(),
       name: req.body.name,
       description: req.body.description,
       price: parseFloat(req.body.price),
       color: req.body.color,
       size: req.body.size,
       stock: parseInt(req.body.stock) || 0,
-      dressCode: req.body.dressCode || '',
+      dressCode: nextDressCode,                          // <-- USE IT HERE (replace old dressCode)
       productWeight: parseFloat(req.body.productWeight) || 0,
       shippingFee: parseFloat(req.body.shippingFee) || 0,
       weightKg: parseFloat(req.body.weightKg) || 0,
@@ -86,6 +101,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       asianSize: req.body.asianSize || '',
       imageUrl: imageUrl,
     };
+
     products.push(newProduct);
     await writeProducts(products);
     res.status(201).json(newProduct);
