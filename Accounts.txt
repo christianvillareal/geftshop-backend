@@ -1,0 +1,10 @@
+URL: https://cloudinary.com/
+
+USER:chanix.webdesigns@gmail.com
+PW: ChanMille2015%
+
+
+API CALL BACKEND
+https://geftshop-backend.onrender.com/api/products
+
+https://dashboard.render.com/ (Sign in on Github)
