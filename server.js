@@ -17,6 +17,7 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
+// JSONBin config
 const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
 const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
@@ -28,11 +29,10 @@ const readProducts = async () => {
   });
   if (!res.ok) throw new Error(`JSONBin read failed: ${res.status}`);
   const data = await res.json();
-  // data.record contains the saved JSON (should be { products: [...] })
   return data.record?.products || [];
 };
 
-// Write products – preserves {"products": [...]} structure
+// Write products – preserves {"products": [...]}
 const writeProducts = async (products) => {
   const payload = { products };
   const res = await fetch(JSONBIN_URL, {
@@ -84,14 +84,16 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// POST new product (with image)
-app.post('/api/products', upload.single('image'), async (req, res) => {
+// POST new product (multiple images)
+app.post('/api/products', upload.array('images', 10), async (req, res) => {
   try {
-    let imageUrl = null;
-    if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path);
-      imageUrl = result.secure_url;
-      fs.unlinkSync(req.file.path);
+    let imageUrls = [];
+    if (req.files && req.files.length) {
+      for (const file of req.files) {
+        const result = await cloudinary.uploader.upload(file.path);
+        imageUrls.push(result.secure_url);
+        fs.unlinkSync(file.path);
+      }
     }
 
     const products = await readProducts();
@@ -113,7 +115,7 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
       length: parseFloat(req.body.length) || 0,
       waist: parseFloat(req.body.waist) || 0,
       asianSize: req.body.asianSize || '',
-      imageUrl: imageUrl,
+      imageUrls: imageUrls,
     };
 
     products.push(newProduct);
@@ -125,24 +127,28 @@ app.post('/api/products', upload.single('image'), async (req, res) => {
   }
 });
 
-// PUT update product
-app.put('/api/products/:id', upload.single('image'), async (req, res) => {
+// PUT update product (multiple images – replace old ones)
+app.put('/api/products/:id', upload.array('images', 10), async (req, res) => {
   try {
     let products = await readProducts();
     const index = products.findIndex(p => p.id == req.params.id);
     if (index === -1) return res.status(404).json({ error: 'Not found' });
 
-    let imageUrl = products[index].imageUrl;
-    if (req.file) {
-      const result = await cloudinary.uploader.upload(req.file.path);
-      imageUrl = result.secure_url;
-      fs.unlinkSync(req.file.path);
+    let imageUrls = products[index].imageUrls || [];
+    if (req.files && req.files.length) {
+      // Replace old images with new ones
+      imageUrls = [];
+      for (const file of req.files) {
+        const result = await cloudinary.uploader.upload(file.path);
+        imageUrls.push(result.secure_url);
+        fs.unlinkSync(file.path);
+      }
     }
 
     const updated = {
       ...products[index],
       ...req.body,
-      imageUrl,
+      imageUrls: imageUrls,
       price: parseFloat(req.body.price) || products[index].price,
       stock: parseInt(req.body.stock) !== undefined ? parseInt(req.body.stock) : products[index].stock,
     };
