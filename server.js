@@ -244,6 +244,23 @@ app.put('/api/orders/:id', async (req, res) => {
   }
 });
 
+// ========== NEW: DELETE ORDER ==========
+app.delete('/api/orders/:id', async (req, res) => {
+  try {
+    let orders = await readOrders();
+    const id = parseInt(req.params.id);
+    const newOrders = orders.filter(o => o.id !== id);
+    if (newOrders.length === orders.length) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    await writeOrders(newOrders);
+    res.json({ message: 'Order deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to delete order' });
+  }
+});
+
 // ========== ROOT ==========
 app.get('/', (req, res) => {
   res.send('Geftshop API is running. Visit /api/products or /api/orders');
