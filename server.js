@@ -5,6 +5,7 @@ const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const fetch = require('node-fetch');
 const fs = require('fs');
+const path = require('path');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -17,23 +18,31 @@ app.use(cors());
 app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
-// JSONBin config
-const JSONBIN_BIN_ID = process.env.JSONBIN_BIN_ID;
+// ========== CONFIGURATION ==========
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
-const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
 
-const readProducts = async () => {
-  const res = await fetch(JSONBIN_URL, {
+// Products bin (expects { products: [...] })
+const PRODUCTS_BIN_ID = process.env.JSONBIN_BIN_ID;
+const PRODUCTS_URL = `https://api.jsonbin.io/v3/b/${PRODUCTS_BIN_ID}`;
+
+// Orders bin (expects { orders: [...] })
+const ORDERS_BIN_ID = process.env.ORDER_JSONBIN_BIN_ID;
+const ORDERS_URL = `https://api.jsonbin.io/v3/b/${ORDERS_BIN_ID}`;
+
+// Helper: generic read from a bin that contains a top-level property
+const readFromBin = async (url, key) => {
+  const res = await fetch(url, {
     headers: { 'X-Master-Key': JSONBIN_API_KEY }
   });
   if (!res.ok) throw new Error(`JSONBin read failed: ${res.status}`);
   const data = await res.json();
-  return data.record?.products || [];
+  return data.record?.[key] || [];
 };
 
-const writeProducts = async (products) => {
-  const payload = { products };
-  const res = await fetch(JSONBIN_URL, {
+// Helper: generic write to a bin, storing object with top-level property
+const writeToBin = async (url, key, data) => {
+  const payload = { [key]: data };
+  const res = await fetch(url, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -41,9 +50,16 @@ const writeProducts = async (products) => {
     },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) throw new Error(`JSONBin write failed: ${res.status}`);
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`JSONBin write failed: ${res.status} ${errorText}`);
+  }
   return res.json();
 };
+
+// ========== PRODUCTS ==========
+const readProducts = () => readFromBin(PRODUCTS_URL, 'products');
+const writeProducts = (products) => writeToBin(PRODUCTS_URL, 'products', products);
 
 const getNextDressCode = async () => {
   const products = await readProducts();
@@ -55,7 +71,6 @@ const getNextDressCode = async () => {
   return (max + 1).toString();
 };
 
-// GET all products
 app.get('/api/products', async (req, res) => {
   try {
     const products = await readProducts();
@@ -66,7 +81,6 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// GET single product
 app.get('/api/products/:id', async (req, res) => {
   try {
     const products = await readProducts();
@@ -78,7 +92,6 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
-// POST new product (max 8 images)
 app.post('/api/products', upload.array('images', 8), async (req, res) => {
   try {
     let imageUrls = [];
@@ -121,14 +134,12 @@ app.post('/api/products', upload.array('images', 8), async (req, res) => {
   }
 });
 
-// PUT update product – adds new images, keeps existing, max 8 total
 app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
   try {
     let products = await readProducts();
     const index = products.findIndex(p => p.id == req.params.id);
     if (index === -1) return res.status(404).json({ error: 'Not found' });
 
-    // Existing image URLs kept by admin (sent as JSON string)
     let keptImageUrls = [];
     if (req.body.existingImages) {
       try {
@@ -139,7 +150,6 @@ app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
     }
     if (!Array.isArray(keptImageUrls)) keptImageUrls = [];
 
-    // Upload new images
     let newImageUrls = [];
     if (req.files && req.files.length) {
       for (const file of req.files) {
@@ -170,7 +180,6 @@ app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
   }
 });
 
-// DELETE product
 app.delete('/api/products/:id', async (req, res) => {
   try {
     let products = await readProducts();
@@ -182,6 +191,62 @@ app.delete('/api/products/:id', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Delete failed: ' + err.message });
   }
+});
+
+// ========== ORDERS ==========
+const readOrders = () => readFromBin(ORDERS_URL, 'orders');
+const writeOrders = (orders) => writeToBin(ORDERS_URL, 'orders', orders);
+
+app.get('/api/orders', async (req, res) => {
+  try {
+    const orders = await readOrders();
+    res.json(orders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch orders' });
+  }
+});
+
+app.post('/api/orders', async (req, res) => {
+  try {
+    const orders = await readOrders();
+    const newOrder = {
+      id: Date.now(),
+      orderCode: `ORD-${Date.now()}`,
+      customer: req.body.customer,
+      items: req.body.items,
+      total: req.body.total,
+      paymentPreference: req.body.paymentPreference,
+      status: req.body.status || 'pending',
+      createdAt: new Date().toISOString(),
+    };
+    orders.push(newOrder);
+    await writeOrders(orders);
+    res.status(201).json(newOrder);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to create order' });
+  }
+});
+
+app.put('/api/orders/:id', async (req, res) => {
+  try {
+    let orders = await readOrders();
+    const id = parseInt(req.params.id);
+    const index = orders.findIndex(o => o.id === id);
+    if (index === -1) return res.status(404).json({ error: 'Order not found' });
+    orders[index] = { ...orders[index], ...req.body };
+    await writeOrders(orders);
+    res.json(orders[index]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to update order' });
+  }
+});
+
+// ========== ROOT ==========
+app.get('/', (req, res) => {
+  res.send('Geftshop API is running. Visit /api/products or /api/orders');
 });
 
 const PORT = process.env.PORT || 5000;
