@@ -6,6 +6,7 @@ const cloudinary = require('cloudinary').v2;
 const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
+const { Resend } = require('resend');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -13,6 +14,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+const resend = new Resend(process.env.RESEND_API_KEY);
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -20,34 +22,23 @@ const upload = multer({ dest: 'uploads/' });
 
 // ========== CONFIGURATION ==========
 const JSONBIN_API_KEY = process.env.JSONBIN_API_KEY;
-
-// Products bin (expects { products: [...] })
 const PRODUCTS_BIN_ID = process.env.JSONBIN_BIN_ID;
 const PRODUCTS_URL = `https://api.jsonbin.io/v3/b/${PRODUCTS_BIN_ID}`;
-
-// Orders bin (expects { orders: [...] })
 const ORDERS_BIN_ID = process.env.ORDER_JSONBIN_BIN_ID;
 const ORDERS_URL = `https://api.jsonbin.io/v3/b/${ORDERS_BIN_ID}`;
 
-// Helper: generic read from a bin that contains a top-level property
 const readFromBin = async (url, key) => {
-  const res = await fetch(url, {
-    headers: { 'X-Master-Key': JSONBIN_API_KEY }
-  });
+  const res = await fetch(url, { headers: { 'X-Master-Key': JSONBIN_API_KEY } });
   if (!res.ok) throw new Error(`JSONBin read failed: ${res.status}`);
   const data = await res.json();
   return data.record?.[key] || [];
 };
 
-// Helper: generic write to a bin, storing object with top-level property
 const writeToBin = async (url, key, data) => {
   const payload = { [key]: data };
   const res = await fetch(url, {
     method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Master-Key': JSONBIN_API_KEY,
-    },
+    headers: { 'Content-Type': 'application/json', 'X-Master-Key': JSONBIN_API_KEY },
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -102,10 +93,8 @@ app.post('/api/products', upload.array('images', 8), async (req, res) => {
         fs.unlinkSync(file.path);
       }
     }
-
     const products = await readProducts();
     const nextDressCode = await getNextDressCode();
-
     const newProduct = {
       id: Date.now(),
       name: req.body.name,
@@ -124,7 +113,6 @@ app.post('/api/products', upload.array('images', 8), async (req, res) => {
       asianSize: req.body.asianSize || '',
       imageUrls: imageUrls,
     };
-
     products.push(newProduct);
     await writeProducts(products);
     res.status(201).json(newProduct);
@@ -139,17 +127,10 @@ app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
     let products = await readProducts();
     const index = products.findIndex(p => p.id == req.params.id);
     if (index === -1) return res.status(404).json({ error: 'Not found' });
-
     let keptImageUrls = [];
     if (req.body.existingImages) {
-      try {
-        keptImageUrls = JSON.parse(req.body.existingImages);
-      } catch (e) {
-        keptImageUrls = [];
-      }
+      try { keptImageUrls = JSON.parse(req.body.existingImages); } catch(e) { keptImageUrls = []; }
     }
-    if (!Array.isArray(keptImageUrls)) keptImageUrls = [];
-
     let newImageUrls = [];
     if (req.files && req.files.length) {
       for (const file of req.files) {
@@ -158,12 +139,8 @@ app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
         fs.unlinkSync(file.path);
       }
     }
-
     let finalImageUrls = [...keptImageUrls, ...newImageUrls];
-    if (finalImageUrls.length > 8) {
-      return res.status(400).json({ error: 'Maximum 8 images allowed per product' });
-    }
-
+    if (finalImageUrls.length > 8) return res.status(400).json({ error: 'Maximum 8 images allowed' });
     const updated = {
       ...products[index],
       ...req.body,
@@ -222,6 +199,32 @@ app.post('/api/orders', async (req, res) => {
     };
     orders.push(newOrder);
     await writeOrders(orders);
+
+    // Send email to admin
+    const adminEmail = process.env.ADMIN_EMAIL || 'your-email@gmail.com';
+    const orderItemsHtml = newOrder.items.map(item => `
+      <tr><td style="border:1px solid #ddd; padding:8px;">${item.name}</td>
+      <td style="border:1px solid #ddd; padding:8px;">${item.dressCode || 'N/A'}</td>
+      <td style="border:1px solid #ddd; padding:8px;">₱${item.price.toLocaleString()}</td></tr>
+    `).join('');
+    try {
+      await resend.emails.send({
+        from: 'Geftshop <onboarding@resend.dev>',
+        to: adminEmail,
+        subject: `🛍️ New Order #${newOrder.orderCode}`,
+        html: `<h2>New Order Received</h2><p><strong>Order Code:</strong> ${newOrder.orderCode}</p>
+               <p><strong>Customer:</strong> ${newOrder.customer.firstName} ${newOrder.customer.lastName}</p>
+               <p><strong>Email:</strong> ${newOrder.customer.email}</p>
+               <p><strong>Phone:</strong> ${newOrder.customer.phone}</p>
+               <p><strong>Address:</strong> ${newOrder.customer.address}</p>
+               <p><strong>Payment Preference:</strong> ${newOrder.paymentPreference}</p>
+               <h3>Items Ordered:</h3><table style="border-collapse:collapse; width:100%;">${orderItemsHtml}</table>
+               <p><strong>Total:</strong> ₱${newOrder.total.toLocaleString()}</p>
+               <p><a href="https://geftshop-backend.onrender.com/api/orders">View all orders</a></p>`,
+      });
+      console.log(`📧 Email sent for order ${newOrder.orderCode}`);
+    } catch (emailErr) { console.error('Email error:', emailErr); }
+
     res.status(201).json(newOrder);
   } catch (err) {
     console.error(err);
@@ -244,15 +247,12 @@ app.put('/api/orders/:id', async (req, res) => {
   }
 });
 
-// ========== NEW: DELETE ORDER ==========
 app.delete('/api/orders/:id', async (req, res) => {
   try {
     let orders = await readOrders();
     const id = parseInt(req.params.id);
     const newOrders = orders.filter(o => o.id !== id);
-    if (newOrders.length === orders.length) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
+    if (newOrders.length === orders.length) return res.status(404).json({ error: 'Order not found' });
     await writeOrders(newOrders);
     res.json({ message: 'Order deleted successfully' });
   } catch (err) {
@@ -261,9 +261,36 @@ app.delete('/api/orders/:id', async (req, res) => {
   }
 });
 
+// ========== CONTACT FORM ==========
+app.post('/api/contact', async (req, res) => {
+  const { user_name, user_email, subject, message } = req.body;
+  if (!user_name || !user_email || !subject || !message) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
+  const adminEmail = process.env.ADMIN_EMAIL || 'your-email@gmail.com';
+  try {
+    await resend.emails.send({
+      from: 'Geftshop Contact <onboarding@resend.dev>',
+      to: adminEmail,
+      replyTo: user_email,
+      subject: `📬 Contact Form: ${subject}`,
+      html: `<h2>New Contact Form Submission</h2>
+             <p><strong>Name:</strong> ${user_name}</p>
+             <p><strong>Email:</strong> ${user_email}</p>
+             <p><strong>Subject:</strong> ${subject}</p>
+             <p><strong>Message:</strong></p>
+             <p>${message.replace(/\n/g, '<br/>')}</p>`,
+    });
+    res.status(200).json({ message: 'Email sent successfully' });
+  } catch (err) {
+    console.error('Contact email error:', err);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
+});
+
 // ========== ROOT ==========
 app.get('/', (req, res) => {
-  res.send('Geftshop API is running. Visit /api/products or /api/orders');
+  res.send('Geftshop API is running. Visit /api/products, /api/orders, or /api/contact');
 });
 
 const PORT = process.env.PORT || 5000;
