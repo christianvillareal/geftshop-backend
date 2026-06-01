@@ -88,7 +88,14 @@ app.post('/api/products', upload.array('images', 8), async (req, res) => {
     let imageUrls = [];
     if (req.files && req.files.length) {
       for (const file of req.files) {
-        const result = await cloudinary.uploader.upload(file.path);
+        // Optimize image on upload: resize to 800px, auto quality, WebP format
+        const result = await cloudinary.uploader.upload(file.path, {
+          transformation: [
+            { width: 800, crop: 'scale' },
+            { quality: 'auto' },
+            { fetch_format: 'auto' }
+          ]
+        });
         imageUrls.push(result.secure_url);
         fs.unlinkSync(file.path);
       }
@@ -100,8 +107,8 @@ app.post('/api/products', upload.array('images', 8), async (req, res) => {
       name: req.body.name,
       description: req.body.description,
       price: parseFloat(req.body.price),
-      color: req.body.color,
-      size: req.body.size,
+      color: req.body.color || '',
+      size: req.body.size || '',
       stock: parseInt(req.body.stock) || 0,
       dressCode: nextDressCode,
       productWeight: parseFloat(req.body.productWeight) || 0,
@@ -134,7 +141,14 @@ app.put('/api/products/:id', upload.array('images', 8), async (req, res) => {
     let newImageUrls = [];
     if (req.files && req.files.length) {
       for (const file of req.files) {
-        const result = await cloudinary.uploader.upload(file.path);
+        // Optimize image on upload
+        const result = await cloudinary.uploader.upload(file.path, {
+          transformation: [
+            { width: 800, crop: 'scale' },
+            { quality: 'auto' },
+            { fetch_format: 'auto' }
+          ]
+        });
         newImageUrls.push(result.secure_url);
         fs.unlinkSync(file.path);
       }
@@ -218,7 +232,7 @@ app.post('/api/orders', async (req, res) => {
                <p><strong>Phone:</strong> ${newOrder.customer.phone}</p>
                <p><strong>Address:</strong> ${newOrder.customer.address}</p>
                <p><strong>Payment Preference:</strong> ${newOrder.paymentPreference}</p>
-               <h3>Items Ordered:</h3><table style="border-collapse:collapse; width:100%;">${orderItemsHtml}</table>
+               <h3>Items Ordered:</h3><table style="border-collapse:collapse; width:100%;">${orderItemsHtml}<td>
                <p><strong>Total:</strong> ₱${newOrder.total.toLocaleString()}</p>
                <p><a href="https://geftshop-backend.onrender.com/api/orders">View all orders</a></p>`,
       });
